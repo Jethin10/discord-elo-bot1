@@ -3,22 +3,19 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
+from keep_alive import keep_alive  # keeps bot alive on Render
 
-# Get token from environment variable
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Set up bot with necessary intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# Database file & matchmaking queue
 DATA_FILE = "users.json"
 queue = []
 pending_reports = {}
 
-# Load/save user data
+# Load and save Elo data
 def load_data():
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE, "w") as f:
@@ -30,25 +27,25 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# Sync slash commands
 @bot.event
 async def on_ready():
     await bot.wait_until_ready()
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} slash commands.")
+        print(f"Synced {len(synced)} command(s)")
     except Exception as e:
-        print(f"❌ Failed to sync commands: {e}")
-    print(f"🎮 Bot is online: {bot.user}")
+        print(f"Failed to sync commands: {e}")
+    print(f"Bot is ready! Logged in as {bot.user}")
 
-# /register
-@bot.tree.command(name="register", description="Register your Pokémon Showdown username.")
+# Register command
+@bot.tree.command(name="register", description="Link your Discord to your Showdown username")
 async def register(interaction: discord.Interaction, showdown_name: str):
+    await interaction.response.defer()
     data = load_data()
     user_id = str(interaction.user.id)
 
     if user_id in data:
-        await interaction.response.send_message("⚠️ You're already registered.")
+        await interaction.followup.send("You're already registered.")
         return
 
     data[user_id] = {
@@ -59,215 +56,208 @@ async def register(interaction: discord.Interaction, showdown_name: str):
         "losses": 0
     }
     save_data(data)
-    await interaction.response.send_message(f"✅ Registered as `{showdown_name}` with 1000 Elo.")
+    await interaction.followup.send(f"✅ Registered as `{showdown_name}` with 1000 Elo!")
 
-# /cancel_register
-@bot.tree.command(name="cancel_register", description="Remove your account and data.")
+# Cancel register
+@bot.tree.command(name="cancel_register", description="Delete your registration and data")
 async def cancel_register(interaction: discord.Interaction):
+    await interaction.response.defer()
     data = load_data()
     user_id = str(interaction.user.id)
 
     if user_id not in data:
-        await interaction.response.send_message("❌ You're not registered.")
+        await interaction.followup.send("❌ You're not registered.")
         return
 
     queue[:] = [uid for uid in queue if uid != user_id]
-
-    keys_to_remove = [k for k in pending_reports if user_id in k]
-    for k in keys_to_remove:
-        del pending_reports[k]
+    for key in list(pending_reports.keys()):
+        if user_id in key:
+            del pending_reports[key]
 
     del data[user_id]
     save_data(data)
+    await interaction.followup.send("🗑️ Your registration and data have been deleted.")
 
-    await interaction.response.send_message("🗑️ Your data has been deleted. You're no longer registered.")
-
-# /profile
-@bot.tree.command(name="profile", description="See your stats and Showdown name.")
+# Profile command
+@bot.tree.command(name="profile", description="Check your Elo and stats")
 async def profile(interaction: discord.Interaction):
+    await interaction.response.defer()
     data = load_data()
     user_id = str(interaction.user.id)
 
     if user_id not in data:
-        await interaction.response.send_message("❌ You're not registered.")
+        await interaction.followup.send("You’re not registered. Use `/register <ps_username>`.")
         return
 
     user = data[user_id]
-    await interaction.response.send_message(
-        f"📊 **Profile: {user['discord_name']}**\n"
-        f"🧢 Showdown: `{user['showdown_name']}`\n"
-        f"🏅 Elo: {user['elo']}\n"
-        f"⚔️ Record: {user['wins']}W / {user['losses']}L"
+    await interaction.followup.send(
+        f"👤 **{interaction.user.name}**\n"
+        f"🔢 Elo: **{user['elo']}**\n"
+        f"🏆 W/L: {user['wins']}W / {user['losses']}L\n"
+        f"🧢 Showdown: `{user['showdown_name']}`"
     )
 
-# /matchmake
-@bot.tree.command(name="matchmake", description="Enter the ranked matchmaking queue.")
+# Matchmaking command
+@bot.tree.command(name="matchmake", description="Join the matchmaking queue")
 async def matchmake(interaction: discord.Interaction):
+    await interaction.response.defer()
     data = load_data()
     user_id = str(interaction.user.id)
 
     if user_id not in data:
-        await interaction.response.send_message("❌ Register first with `/register`.")
+        await interaction.followup.send("Register first using `/register`.")
         return
-
     if user_id in queue:
-        await interaction.response.send_message("⚠️ You're already in the queue.")
+        await interaction.followup.send("You’re already in the queue.")
         return
 
     queue.append(user_id)
-    await interaction.response.send_message("🔍 Searching for a match...")
+    await interaction.followup.send("🔍 Searching for opponents...")
 
-    # Try to find opponent
-    player = data[user_id]
-    best_match = None
-    best_diff = 9999
+    p1 = data[user_id]
+    match = None
+    best_diff = float("inf")
 
-    for other_id in queue:
-        if other_id == user_id:
-            continue
-        opponent = data[other_id]
-        diff = abs(player["elo"] - opponent["elo"])
-        if diff <= 150 and diff < best_diff:
-            best_match = other_id
-            best_diff = diff
+    for other in queue:
+        if other != user_id:
+            p2 = data[other]
+            diff = abs(p1["elo"] - p2["elo"])
+            if diff <= 150 and diff < best_diff:
+                match = other
+                best_diff = diff
 
-    if best_match:
+    if match:
         queue.remove(user_id)
-        queue.remove(best_match)
-        p1, p2 = data[user_id], data[best_match]
-
+        queue.remove(match)
+        p2 = data[match]
         await interaction.followup.send(
-            f"🎉 **Match Found!**\n"
-            f"<@{user_id}> (`{p1['showdown_name']}`) **vs** <@{best_match}> (`{p2['showdown_name']}`)\n"
-            f"🔗 Go to https://play.pokemonshowdown.com/ and challenge each other!\n"
-            f"📝 After the match, use `/report win @opponent` or `/report lose @opponent`"
+            f"🎮 **MATCH FOUND!**\n"
+            f"<@{user_id}> (`{p1['showdown_name']}`, {p1['elo']} Elo) vs "
+            f"<@{match}> (`{p2['showdown_name']}`, {p2['elo']} Elo)\n\n"
+            f"Challenge each other on https://play.pokemonshowdown.com/"
         )
 
-# /cancelmatch
-@bot.tree.command(name="cancelmatch", description="Leave the matchmaking queue.")
+# Cancel match
+@bot.tree.command(name="cancelmatch", description="Leave the matchmaking queue")
 async def cancelmatch(interaction: discord.Interaction):
+    await interaction.response.defer()
     user_id = str(interaction.user.id)
     if user_id in queue:
         queue.remove(user_id)
-        await interaction.response.send_message("❌ You left the matchmaking queue.")
+        await interaction.followup.send("❌ You’ve left the matchmaking queue.")
     else:
-        await interaction.response.send_message("⚠️ You're not in the queue.")
+        await interaction.followup.send("You're not in the queue.")
 
-# /report
-@bot.tree.command(name="report", description="Report match result (confirmation needed).")
-@app_commands.describe(result="Choose 'win' or 'lose'", opponent="Your opponent")
-async def report(interaction: discord.Interaction, result: str, opponent: discord.Member):
+# Queue status
+@bot.tree.command(name="queue_status", description="See who is in queue")
+async def queue_status(interaction: discord.Interaction):
+    await interaction.response.defer()
     data = load_data()
-    uid, oid = str(interaction.user.id), str(opponent.id)
-    result = result.lower()
+    if not queue:
+        await interaction.followup.send("🔕 The matchmaking queue is empty.")
+        return
+    msg = "**🎮 Current Queue:**\n"
+    for uid in queue:
+        user = data.get(uid)
+        msg += f"- {user['discord_name']} ({user['elo']} Elo)\n"
+    await interaction.followup.send(msg)
+
+# Report result
+@bot.tree.command(name="report", description="Report match result (needs opponent confirmation)")
+@app_commands.describe(result="win or lose", opponent="Mention your opponent")
+async def report(interaction: discord.Interaction, result: str, opponent: discord.Member):
+    await interaction.response.defer()
+    data = load_data()
+    uid = str(interaction.user.id)
+    oid = str(opponent.id)
 
     if uid not in data or oid not in data:
-        await interaction.response.send_message("❌ Both players must be registered.")
+        await interaction.followup.send("Both players must be registered.")
         return
 
-    if result not in ["win", "lose"]:
-        await interaction.response.send_message("⚠️ Result must be `win` or `lose`.")
+    if uid == oid or result.lower() not in ["win", "lose"]:
+        await interaction.followup.send("Invalid usage. You can't report yourself.")
         return
 
     key = f"{min(uid, oid)}_{max(uid, oid)}"
-
-    # Confirm if both agree
     if key in pending_reports:
-        report_data = pending_reports[key]
-        if report_data["reporter"] == oid and report_data["result"] != result:
-            p1, p2 = data[uid], data[oid]
+        prev = pending_reports[key]
+        if prev["reporter"] == oid and prev["result"] != result:
+            del pending_reports[key]
+            winner = data[uid] if result == "win" else data[oid]
+            loser = data[oid] if result == "win" else data[uid]
             K = 32
-            expected = 1 / (1 + 10 ** ((p2["elo"] - p1["elo"]) / 400))
-            delta = round(K * (1 - expected)) if result == "win" else round(K * expected)
+            expected = 1 / (1 + 10 ** ((loser["elo"] - winner["elo"]) / 400))
+            delta = round(K * (1 - expected))
 
-            if result == "win":
-                p1["elo"] += delta
-                p2["elo"] -= delta
-                p1["wins"] += 1
-                p2["losses"] += 1
-            else:
-                p1["elo"] -= delta
-                p2["elo"] += delta
-                p1["losses"] += 1
-                p2["wins"] += 1
+            winner["elo"] += delta
+            winner["wins"] += 1
+            loser["elo"] -= delta
+            loser["losses"] += 1
 
             save_data(data)
-            del pending_reports[key]
-
-            await interaction.response.send_message(
-                f"✅ Match confirmed. Elo updated!\n"
-                f"🏆 {p1['discord_name']}: {p1['elo']} Elo\n"
-                f"😓 {p2['discord_name']}: {p2['elo']} Elo"
+            await interaction.followup.send(
+                f"✅ **Match confirmed!**\n"
+                f"🏆 {winner['discord_name']}: +{delta} Elo\n"
+                f"💔 {loser['discord_name']}: -{delta} Elo"
             )
+            return
         else:
-            await interaction.response.send_message("❌ Conflict! Please cancel the report with `/cancel_report` and try again.")
-    else:
-        pending_reports[key] = {
-            "reporter": uid,
-            "opponent": oid,
-            "result": result
-        }
-        await interaction.response.send_message(
-            f"📝 Report submitted! Waiting for {opponent.mention} to confirm.\n"
-            f"Use `/report {'lose' if result == 'win' else 'win'} @{interaction.user.name}` to confirm."
-        )
+            await interaction.followup.send("⚠️ There's already a conflicting report. Use `/cancel_report` to fix it.")
+            return
 
-# /cancel_report
-@bot.tree.command(name="cancel_report", description="Cancel a pending match report.")
-async def cancel_report(interaction: discord.Interaction):
-    uid = str(interaction.user.id)
-    to_cancel = None
-    for k, v in pending_reports.items():
-        if uid == v["reporter"] or uid == v["opponent"]:
-            to_cancel = k
-            break
-    if to_cancel:
-        del pending_reports[to_cancel]
-        await interaction.response.send_message("🗑️ Pending match report cancelled.")
-    else:
-        await interaction.response.send_message("No report found to cancel.")
-
-# /leaderboard
-@bot.tree.command(name="leaderboard", description="See top players by Elo.")
-async def leaderboard(interaction: discord.Interaction):
-    data = load_data()
-    sorted_data = sorted(data.items(), key=lambda x: x[1]["elo"], reverse=True)
-    msg = "**🏆 Leaderboard:**\n"
-    for i, (uid, u) in enumerate(sorted_data[:10], 1):
-        msg += f"{i}. {u['discord_name']} - {u['elo']} Elo\n"
-    await interaction.response.send_message(msg)
-
-# /queue_status
-@bot.tree.command(name="queue_status", description="Who's waiting in queue.")
-async def queue_status(interaction: discord.Interaction):
-    if not queue:
-        await interaction.response.send_message("🕒 Queue is empty.")
-        return
-    data = load_data()
-    msg = "**🎮 Current Queue:**\n"
-    for i, uid in enumerate(queue, 1):
-        user = data.get(uid)
-        if user:
-            msg += f"{i}. {user['discord_name']} - {user['elo']} Elo\n"
-    await interaction.response.send_message(msg)
-
-# /help_commands
-@bot.tree.command(name="help_commands", description="List all available commands.")
-async def help_commands(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "**📘 Pokémon Elo Bot Commands:**\n\n"
-        "🛠️ `/register <ps_name>` — Register your account\n"
-        "🧢 `/profile` — View your stats\n"
-        "🔁 `/matchmake` — Enter matchmaking\n"
-        "❌ `/cancelmatch` — Leave queue\n"
-        "📊 `/leaderboard` — Top 10 players\n"
-        "⚔️ `/report <win/lose> @opponent` — Submit battle result\n"
-        "⏳ `/cancel_report` — Cancel a report\n"
-        "🚫 `/cancel_register` — Delete your data"
+    pending_reports[key] = {"reporter": uid, "opponent": oid, "result": result}
+    await interaction.followup.send(
+        f"📋 Report submitted: You reported a **{result}** vs <@{oid}>.\n"
+        f"<@{oid}>, please confirm by using `/report {'win' if result == 'lose' else 'lose'} @{interaction.user.name}`."
     )
 
+# Cancel report
+@bot.tree.command(name="cancel_report", description="Cancel your pending report")
+async def cancel_report(interaction: discord.Interaction):
+    await interaction.response.defer()
+    uid = str(interaction.user.id)
+    for key, report in list(pending_reports.items()):
+        if uid in key:
+            del pending_reports[key]
+            await interaction.followup.send("❌ Your pending report has been cancelled.")
+            return
+    await interaction.followup.send("You don’t have any pending reports.")
+
+# Leaderboard
+@bot.tree.command(name="leaderboard", description="View top 10 players by Elo")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    data = load_data()
+    sorted_users = sorted(data.items(), key=lambda x: x[1]["elo"], reverse=True)
+    msg = "**🏆 Leaderboard:**\n"
+    for i, (uid, user) in enumerate(sorted_users[:10], 1):
+        msg += f"{i}. {user['discord_name']} - {user['elo']} Elo\n"
+    await interaction.followup.send(msg)
+
+# Help command
+@bot.tree.command(name="help_commands", description="List all bot commands")
+async def help_commands(interaction: discord.Interaction):
+    await interaction.response.send_message("""
+📘 **Commands:**
+
+**Setup**
+- `/register <name>` — Register your Showdown name
+- `/cancel_register` — Delete your data
+
+**Matchmaking**
+- `/matchmake`, `/cancelmatch`, `/queue_status`
+
+**Battle**
+- `/report win/lose @opponent`, `/cancel_report`
+
+**Stats**
+- `/profile`, `/leaderboard`
+""")
+
 # Run the bot
+keep_alive()
 if TOKEN:
     bot.run(TOKEN)
 else:
-    print("❌ DISCORD_TOKEN environment variable not set.")
+    print("❌ DISCORD_TOKEN not found!")
