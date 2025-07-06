@@ -21,7 +21,8 @@ def keep_alive():
 # Discord bot setup
 intents = discord.Intents.default()
 intents.members = True  # enable members intent if needed
-bot = commands.Bot(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 # Data file path
 DATA_FILE = 'data.json'
