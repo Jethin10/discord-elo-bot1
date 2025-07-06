@@ -1,0 +1,2 @@
+discord.py
+keep_alive
