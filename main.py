@@ -142,7 +142,7 @@ async def matchmake(interaction: discord.Interaction):
                 f"<@{uid}> (`{p1['showdown_name']}` | {p1['elo']} Elo)\n"
                 f"vs\n"
                 f"<@{best_match}> (`{p2['showdown_name']}` | {p2['elo']} Elo)\n\n"
-                f"Battle at https://play.pokemonshowdown.com/\n"
+                f"Battle with this code '/challenge OU @@@ -all items, -gholdengo, +spectrier, +roaring moon, +terapagos, +regieleki, +volcarona, Terastal Clause' \n"
                 f"Report after the match with `/report win @user` or `/report lose @user`"
             )
         )
