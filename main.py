@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.ui import Button, View
 import os
 import json
 from keep_alive import keep_alive  # For 24/7 hosting via web ping
@@ -275,6 +276,18 @@ async def leaderboard(interaction: discord.Interaction):
         msg += f"{i}. {u['discord_name']} — {u['elo']} Elo\n"
     await interaction.response.send_message(msg, ephemeral=True)
 
+# Doc Command
+@tree.command(name="doc", description="Get the documentation link")
+async def doc(interaction: discord.Interaction):
+    button = Button(label="📘 Open Documentation For Itemless", url="https://docs.google.com/document/d/1OYhCMzs3ngE-x-E_SOWjNO4Ot_KJc5509qd-cxduZUI/edit?usp=sharing") 
+    view = View()
+    view.add_item(button)
+    await interaction.response.send_message(
+        "Here’s the documentation for the bot:", 
+        view=view,
+        ephemeral=True
+    )
+
 # Help
 @tree.command(name="help_commands", description="View all commands")
 async def help_commands(interaction: discord.Interaction):
@@ -297,6 +310,7 @@ async def help_commands(interaction: discord.Interaction):
 **📊 Stats**
 /profile — View your stats  
 /leaderboard — Top 10 players
+/doc - Rules and documentaion of the format
 """, ephemeral=True)
 
 # Start bot
